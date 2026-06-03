@@ -104,8 +104,6 @@ export interface ChineseWord {
   exampleKo?: string // 예문 뜻
   source?: string // 출처 (교재/페이지)
   tags?: string[] // 태그
-  hsk?: number // HSK 레벨 (2순위)
-  radical?: string // 부수 (2순위)
   learned: boolean // 외움 여부
   // 간단 SRS (플래시카드 복습용)
   reviewCount?: number

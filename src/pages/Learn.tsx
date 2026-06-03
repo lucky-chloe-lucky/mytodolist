@@ -378,8 +378,6 @@ function ChineseEditor({
       exampleKo: exampleKo.trim() || undefined,
       source: source.trim() || undefined,
       tags: tagList.length ? tagList : undefined,
-      hsk: word?.hsk,
-      radical: word?.radical,
       learned: word?.learned ?? false,
       reviewCount: word?.reviewCount,
       lastReviewedAt: word?.lastReviewedAt,
