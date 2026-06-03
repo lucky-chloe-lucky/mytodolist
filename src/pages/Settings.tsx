@@ -52,6 +52,8 @@ export function Settings() {
     weeklyNotes: '주간메모',
     timeblocks: '타임블록',
     timeCategories: '색상범례',
+    chineseWords: '중국어',
+    readingNotes: '독서',
   }
 
   return (

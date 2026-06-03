@@ -8,6 +8,7 @@ export const NAV = [
   { to: '/daily', icon: '📝', label: '데일리' },
   { to: '/weekly', icon: '🗓️', label: '주간' },
   { to: '/sprints', icon: '🏃', label: '스프린트' },
+  { to: '/learn', icon: '📚', label: '배움' },
   { to: '/settings', icon: '⚙️', label: '설정' },
 ]
 
@@ -88,12 +89,12 @@ export function Layout() {
             end={item.end}
             className={({ isActive }) =>
               [
-                'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition',
+                'flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium whitespace-nowrap transition',
                 isActive ? 'text-brand-600' : 'text-muted',
               ].join(' ')
             }
           >
-            <span className="text-xl">{item.icon}</span>
+            <span className="text-lg">{item.icon}</span>
             {item.label}
           </NavLink>
         ))}

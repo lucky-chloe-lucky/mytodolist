@@ -7,6 +7,7 @@ import { Projects } from './pages/Projects'
 import { Daily } from './pages/Daily'
 import { Weekly } from './pages/Weekly'
 import { Sprints } from './pages/Sprints'
+import { Learn } from './pages/Learn'
 import { Settings } from './pages/Settings'
 import { Login } from './pages/Login'
 
@@ -33,6 +34,7 @@ function Gate() {
         <Route path="daily" element={<Daily />} />
         <Route path="weekly" element={<Weekly />} />
         <Route path="sprints" element={<Sprints />} />
+        <Route path="learn" element={<Learn />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

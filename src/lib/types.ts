@@ -92,6 +92,29 @@ export interface TimeCategory {
   label: string
 }
 
+// Chinese vocabulary / phrase note.
+export interface ChineseWord {
+  id: string
+  hanzi: string // 中文
+  pinyin?: string // 병음
+  meaning: string // 뜻
+  example?: string // 예문
+  learned: boolean // 외움 여부
+  createdAt: number
+}
+
+// Reading log: a memorable quote or a book review.
+export interface ReadingNote {
+  id: string
+  book: string // 책 제목
+  author?: string
+  type: 'quote' | 'review' // 💬 문장 / 📝 독서록
+  content: string
+  page?: string // 문장 페이지(선택)
+  rating?: number // 독서록 별점 1~5(선택)
+  createdAt: number
+}
+
 // Maps a collection name to its record type.
 export interface Schema {
   todos: Todo
@@ -104,6 +127,8 @@ export interface Schema {
   weeklyNotes: WeeklyNote
   timeblocks: TimeBlocks
   timeCategories: TimeCategory
+  chineseWords: ChineseWord
+  readingNotes: ReadingNote
 }
 
 export type CollectionName = keyof Schema
@@ -119,6 +144,8 @@ export const COLLECTIONS: CollectionName[] = [
   'weeklyNotes',
   'timeblocks',
   'timeCategories',
+  'chineseWords',
+  'readingNotes',
 ]
 
 export const PROJECT_COLORS = [

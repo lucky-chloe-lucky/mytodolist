@@ -37,6 +37,8 @@ const emptyData: DataState = {
   weeklyNotes: [],
   timeblocks: [],
   timeCategories: [],
+  chineseWords: [],
+  readingNotes: [],
 }
 
 interface AppContextValue {
