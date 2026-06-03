@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useApp } from '../store/AppStore'
+import { BrandMark } from './BrandMark'
 
 export const NAV = [
   { to: '/', icon: '🏠', label: '홈', end: true },
@@ -20,8 +21,8 @@ export function Layout() {
       {/* Sidebar (desktop) */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-line bg-surface px-4 py-6 md:flex">
         <div className="mb-8 flex items-center gap-2 px-2">
-          <span className="grid size-9 place-items-center rounded-lg bg-ink text-lg text-brand-400">
-            ⚡
+          <span className="grid size-9 place-items-center rounded-lg bg-ink text-brand-400">
+            <BrandMark className="w-5" />
           </span>
           <span className="text-xl font-semibold tracking-tight text-ink">Flow</span>
         </div>
@@ -65,8 +66,8 @@ export function Layout() {
         {/* Mobile top bar */}
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-3 md:hidden">
           <div className="flex items-center gap-2">
-            <span className="grid size-7 place-items-center rounded-lg bg-ink text-sm text-brand-400">
-              ⚡
+            <span className="grid size-7 place-items-center rounded-lg bg-ink text-brand-400">
+              <BrandMark className="w-4" />
             </span>
             <span className="font-semibold tracking-tight text-ink">Flow</span>
           </div>

@@ -1,5 +1,6 @@
 import { useApp } from '../store/AppStore'
 import { Button } from '../components/ui'
+import { BrandMark } from '../components/BrandMark'
 
 // Shown only in cloud mode when no user is signed in.
 export function Login() {
@@ -7,8 +8,8 @@ export function Login() {
   return (
     <div className="grid min-h-full place-items-center px-6">
       <div className="w-full max-w-sm text-center">
-        <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-ink text-3xl text-brand-400 shadow-lg">
-          ⚡
+        <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-ink text-brand-400 shadow-lg">
+          <BrandMark className="w-9" />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Flow</h1>
         <p className="mt-1 mb-8 text-muted">
