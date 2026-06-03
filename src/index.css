@@ -1,0 +1,95 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Geist for Latin/UI, Pretendard for Korean — both real, loaded fonts. */
+  --font-sans: 'Geist', 'Pretendard Variable', 'Pretendard', -apple-system,
+    'Apple SD Gothic Neo', sans-serif;
+  --font-mono: 'Geist Mono', 'Geist', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* Signature accent: lime/chartreuse — the one memorable, non-AI color. */
+  --color-brand-50: #f7fee7;
+  --color-brand-100: #ecfccb;
+  --color-brand-200: #d9f99d;
+  --color-brand-300: #bef264;
+  --color-brand-400: #a3e635;
+  --color-brand-500: #84cc16;
+  --color-brand-600: #65a30d;
+  --color-brand-700: #4d7c0f;
+
+  /* Warm-neutral monochrome base (stone) instead of cool default slate. */
+  --color-ink: #1c1917;
+  --color-muted: #79716b;
+  --color-line: #e7e5e4;
+  --color-surface: #ffffff;
+  --color-canvas: #f6f5f3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Hide scrollbars on horizontal chip rows but keep scrollability */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tabular figures for any aligned numbers (dates, counts). */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+/* Big metric numbers: mono gives the "precision instrument" character. */
+.metric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Small entrance animation for modals/cards */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-pop-in {
+  animation: pop-in 0.16s ease-out;
+}
+
+/* One orchestrated load: staggered reveal for dashboard tiles/lists. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
