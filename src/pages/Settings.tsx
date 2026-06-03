@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { useApp } from '../store/AppStore'
 import { COLLECTIONS, type CollectionName } from '../lib/types'
 import { Button, Card, PageHeader } from '../components/ui'
+import { GcalSync } from '../components/GcalSync'
 
 export function Settings() {
   const { mode, user, signIn, signOut, data, save, remove } = useApp()
@@ -93,6 +94,8 @@ export function Settings() {
             </p>
           )}
         </Card>
+
+        {mode === 'cloud' && user && <GcalSync />}
 
         <Card>
           <h2 className="mb-3 font-semibold text-ink">데이터</h2>

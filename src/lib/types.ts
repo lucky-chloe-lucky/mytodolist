@@ -12,6 +12,7 @@ export interface Todo {
   dueDate?: string // YYYY-MM-DD
   projectId?: string | null
   sprintId?: string | null
+  gcalEventId?: string // 구글 캘린더 이벤트 id (동기화용)
   createdAt: number
   completedAt?: number | null
 }
@@ -24,6 +25,7 @@ export interface Sprint {
   startDate?: string // YYYY-MM-DD
   endDate?: string // YYYY-MM-DD
   status: 'planned' | 'active' | 'done'
+  gcalEventId?: string
   createdAt: number
 }
 
@@ -44,6 +46,7 @@ export interface Milestone {
   title: string
   dueDate?: string // YYYY-MM-DD
   done: boolean
+  gcalEventId?: string
   createdAt: number
 }
 
