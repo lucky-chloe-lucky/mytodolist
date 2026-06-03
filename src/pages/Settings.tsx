@@ -53,6 +53,7 @@ export function Settings() {
     timeblocks: '타임블록',
     timeCategories: '색상범례',
     chineseWords: '중국어',
+    studySessions: '공부세션',
     readingNotes: '독서',
   }
 

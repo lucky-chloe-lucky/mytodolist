@@ -92,14 +92,36 @@ export interface TimeCategory {
   label: string
 }
 
-// Chinese vocabulary / phrase note.
+// Chinese vocabulary / phrase note. (example = 중국어 예문 exampleZh)
 export interface ChineseWord {
   id: string
   hanzi: string // 中文
-  pinyin?: string // 병음
-  meaning: string // 뜻
-  example?: string // 예문
+  pinyin?: string // 병음 (한자 입력 시 자동)
+  pos?: string // 품사 (명사/동사/형용사…)
+  meaning: string // 뜻 (한국어)
+  example?: string // 중국어 예문
+  examplePinyin?: string // 예문 병음 (자동)
+  exampleKo?: string // 예문 뜻
+  source?: string // 출처 (교재/페이지)
+  tags?: string[] // 태그
+  hsk?: number // HSK 레벨 (2순위)
+  radical?: string // 부수 (2순위)
   learned: boolean // 외움 여부
+  // 간단 SRS (플래시카드 복습용)
+  reviewCount?: number
+  lastReviewedAt?: number
+  dueAt?: number // 다음 복습 예정 (ms)
+  createdAt: number
+}
+
+// Chinese study session — "이 날 이 단어들을 배웠음" (N:M via wordIds 배열).
+export interface StudySession {
+  id: string
+  date: string // YYYY-MM-DD
+  source?: string // 교재/챕터
+  durationMin?: number // 공부 시간(분)
+  notes?: string
+  wordIds: string[]
   createdAt: number
 }
 
@@ -128,6 +150,7 @@ export interface Schema {
   timeblocks: TimeBlocks
   timeCategories: TimeCategory
   chineseWords: ChineseWord
+  studySessions: StudySession
   readingNotes: ReadingNote
 }
 
@@ -145,6 +168,7 @@ export const COLLECTIONS: CollectionName[] = [
   'timeblocks',
   'timeCategories',
   'chineseWords',
+  'studySessions',
   'readingNotes',
 ]
 
