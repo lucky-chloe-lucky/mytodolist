@@ -585,6 +585,9 @@ export function Capture() {
             <p className="mt-1 text-sm text-muted">
               인박스나 분류 카드에서 바로 드래그해서 시간대에 놓아보세요. 놓는 순간 일정이 저장돼요.
             </p>
+            <p className="mt-1 text-xs text-muted">
+              Google 가져오기는 현재 구글 캘린더에서 체크해둔 캘린더들을 함께 읽어요.
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <TextInput
@@ -747,13 +750,15 @@ export function Capture() {
 
                 return (
                   <div
-                    key={event.id}
+                    key={`${event.calendarId}:${event.id}`}
                     className="pointer-events-auto absolute z-0 rounded-xl border border-slate-200 bg-slate-100/95 px-3 py-2 text-left shadow-[0_6px_16px_rgba(28,25,23,0.08)]"
                     style={{
                       top: top + 2,
                       left: 18 + laneOffset,
                       right: 18 + laneOffset,
                       height: Math.max(height - 4, 38),
+                      borderLeftColor: event.calendarColor ?? '#94a3b8',
+                      borderLeftWidth: 4,
                     }}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -764,8 +769,11 @@ export function Capture() {
                           {event.end ? ` - ${event.end.slice(11, 16)}` : ''}
                         </p>
                       </div>
-                      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">
-                        Google
+                      <span
+                        className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600"
+                        style={{ color: event.calendarColor ?? undefined }}
+                      >
+                        {event.calendarName}
                       </span>
                     </div>
                     {event.description && (
@@ -800,9 +808,13 @@ export function Capture() {
                   <div className="flex flex-wrap gap-1.5">
                     {externalAllDayEvents.map((event) => (
                       <span
-                        key={event.id}
-                        className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
+                        key={`${event.calendarId}:${event.id}`}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
                       >
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: event.calendarColor ?? '#94a3b8' }}
+                        />
                         {event.summary}
                       </span>
                     ))}
@@ -823,10 +835,19 @@ export function Capture() {
                   <div className="mt-2 flex flex-col gap-2">
                     {externalTimedEvents.map((event) => (
                       <div
-                        key={event.id}
+                        key={`${event.calendarId}:${event.id}`}
                         className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                        style={{ borderLeftColor: event.calendarColor ?? '#94a3b8', borderLeftWidth: 4 }}
                       >
-                        <p className="text-sm font-medium text-ink">{event.summary}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-ink">{event.summary}</p>
+                          <span
+                            className="shrink-0 text-[11px] font-semibold"
+                            style={{ color: event.calendarColor ?? '#64748b' }}
+                          >
+                            {event.calendarName}
+                          </span>
+                        </div>
                         <p className="mt-0.5 text-xs text-slate-600">
                           {event.start.slice(11, 16)}
                           {event.end ? ` - ${event.end.slice(11, 16)}` : ''}
@@ -1002,7 +1023,11 @@ export function Capture() {
       </div>
 
       {schedulingTodo && (
-        <ScheduleTodoModal todo={schedulingTodo} onClose={() => setSchedulingTodo(null)} />
+        <ScheduleTodoModal
+          todo={schedulingTodo}
+          onClose={() => setSchedulingTodo(null)}
+          onCalendarSynced={() => loadGoogleSchedule(true)}
+        />
       )}
       {editingTodo && (
         <EditCaptureTodoModal
@@ -1216,9 +1241,11 @@ function EditCaptureTodoModal({
 function ScheduleTodoModal({
   todo,
   onClose,
+  onCalendarSynced,
 }: {
   todo: Todo
   onClose: () => void
+  onCalendarSynced?: () => Promise<void> | void
 }) {
   const { cloudConfigured, save } = useApp()
   const [scheduledDate, setScheduledDate] = useState(todo.scheduledDate ?? todo.dueDate ?? todayKey())
@@ -1265,6 +1292,7 @@ function ScheduleTodoModal({
           next = { ...next, gcalEventId: id }
           await save('todos', next)
         }
+        await onCalendarSynced?.()
       }
 
       onClose()

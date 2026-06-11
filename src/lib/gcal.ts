@@ -7,8 +7,14 @@ import { addDays, addMinutes, formatISO, parseISO } from 'date-fns'
 import { auth } from './firebase'
 import { toKey } from './date'
 
-const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
-const API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
+const CAL_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
+const CAL_LIST_SCOPE = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly'
+const API_ROOT = 'https://www.googleapis.com/calendar/v3'
+const CALENDAR_LIST_API = `${API_ROOT}/users/me/calendarList`
+
+function eventsApi(calendarId = 'primary') {
+  return `${API_ROOT}/calendars/${encodeURIComponent(calendarId)}/events`
+}
 
 // 세션 동안 캘린더 액세스 토큰 캐시 (Google OAuth 토큰은 ~1시간).
 let cached: { token: string; exp: number } | null = null
@@ -18,7 +24,8 @@ export async function getCalendarToken(): Promise<string> {
   if (cached && cached.exp > Date.now() + 60_000) return cached.token
   if (!auth) throw new Error('클라우드 모드에서만 사용할 수 있어요.')
   const provider = new GoogleAuthProvider()
-  provider.addScope(CAL_SCOPE)
+  provider.addScope(CAL_EVENTS_SCOPE)
+  provider.addScope(CAL_LIST_SCOPE)
   const user = auth.currentUser
   const result = user
     ? await reauthenticateWithPopup(user, provider)
@@ -58,6 +65,14 @@ export interface FlowRef {
   itemId: string
 }
 
+export interface CalendarListRecord {
+  id: string
+  name: string
+  color?: string
+  primary: boolean
+  selected: boolean
+}
+
 export interface CalEvent {
   summary: string
   description?: string
@@ -70,6 +85,9 @@ export interface CalEvent {
 
 export interface CalendarEventRecord {
   id: string
+  calendarId: string
+  calendarName: string
+  calendarColor?: string
   summary: string
   description?: string
   start: string
@@ -100,6 +118,7 @@ function eventBody(ev: CalEvent) {
 function parseCalendarEvent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   raw: any,
+  calendar: CalendarListRecord,
 ): CalendarEventRecord | null {
   if (!raw?.id || raw?.status === 'cancelled') return null
   const allDay = Boolean(raw.start?.date && !raw.start?.dateTime)
@@ -107,6 +126,9 @@ function parseCalendarEvent(
   const flowItemId = raw.extendedProperties?.private?.flowItemId
   return {
     id: raw.id as string,
+    calendarId: calendar.id,
+    calendarName: calendar.name,
+    calendarColor: calendar.color,
     summary: (raw.summary as string | undefined) ?? '(제목 없음)',
     description: raw.description as string | undefined,
     start: (raw.start?.dateTime as string | undefined) ?? (raw.start?.date as string),
@@ -130,7 +152,7 @@ export async function upsertEvent(
   existingId?: string,
 ): Promise<string> {
   const body = JSON.stringify(eventBody(ev))
-  const url = existingId ? `${API}/${existingId}` : API
+  const url = existingId ? `${eventsApi()}/${existingId}` : eventsApi()
   const method = existingId ? 'PATCH' : 'POST'
   let res = await fetch(url, {
     method,
@@ -139,7 +161,7 @@ export async function upsertEvent(
   })
   // 수정 대상이 삭제됐으면(404/410) 새로 생성.
   if (existingId && (res.status === 404 || res.status === 410)) {
-    res = await fetch(API, {
+    res = await fetch(eventsApi(), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body,
@@ -157,8 +179,65 @@ export async function upsertEvent(
   return json.id as string
 }
 
+function parseCalendarListEntry(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw: any,
+): CalendarListRecord | null {
+  if (!raw?.id) return null
+  return {
+    id: raw.id as string,
+    name:
+      (raw.summaryOverride as string | undefined) ??
+      (raw.summary as string | undefined) ??
+      'Google Calendar',
+    color: raw.backgroundColor as string | undefined,
+    primary: Boolean(raw.primary),
+    selected: raw.selected !== false,
+  }
+}
+
+async function listCalendars(token: string): Promise<CalendarListRecord[]> {
+  const calendars: CalendarListRecord[] = []
+  let pageToken: string | null = null
+
+  do {
+    const url = new URL(CALENDAR_LIST_API)
+    url.searchParams.set('showHidden', 'false')
+    url.searchParams.set('maxResults', '250')
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      const txt = await res.text()
+      const err: Error & { status?: number } = new Error(
+        `캘린더 API 오류 (${res.status}): ${txt.slice(0, 200)}`,
+      )
+      err.status = res.status
+      throw err
+    }
+
+    const json = await res.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const item of (json.items as any[] | undefined) ?? []) {
+      const calendar = parseCalendarListEntry(item)
+      if (calendar) calendars.push(calendar)
+    }
+    pageToken = (json.nextPageToken as string | undefined) ?? null
+  } while (pageToken)
+
+  return calendars
+}
+
 export async function getEvent(token: string, id: string): Promise<CalendarEventRecord | null> {
-  const res = await fetch(`${API}/${id}`, {
+  const primary: CalendarListRecord = {
+    id: 'primary',
+    name: '내 캘린더',
+    primary: true,
+    selected: true,
+  }
+  const res = await fetch(`${eventsApi()}/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (res.status === 404 || res.status === 410) return null
@@ -171,7 +250,49 @@ export async function getEvent(token: string, id: string): Promise<CalendarEvent
     throw err
   }
   const json = await res.json()
-  return parseCalendarEvent(json)
+  return parseCalendarEvent(json, primary)
+}
+
+async function listEventsForCalendar(
+  token: string,
+  calendar: CalendarListRecord,
+  timeMin: string,
+  timeMax: string,
+): Promise<CalendarEventRecord[]> {
+  const events: CalendarEventRecord[] = []
+  let pageToken: string | null = null
+
+  do {
+    const url = new URL(eventsApi(calendar.id))
+    url.searchParams.set('timeMin', timeMin)
+    url.searchParams.set('timeMax', timeMax)
+    url.searchParams.set('singleEvents', 'true')
+    url.searchParams.set('orderBy', 'startTime')
+    url.searchParams.set('maxResults', '2500')
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      const txt = await res.text()
+      const err: Error & { status?: number } = new Error(
+        `캘린더 API 오류 (${res.status}): ${txt.slice(0, 200)}`,
+      )
+      err.status = res.status
+      throw err
+    }
+
+    const json = await res.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const item of (json.items as any[] | undefined) ?? []) {
+      const event = parseCalendarEvent(item, calendar)
+      if (event) events.push(event)
+    }
+    pageToken = (json.nextPageToken as string | undefined) ?? null
+  } while (pageToken)
+
+  return events
 }
 
 export async function listEvents(
@@ -179,28 +300,25 @@ export async function listEvents(
   timeMin: string,
   timeMax: string,
 ): Promise<CalendarEventRecord[]> {
-  const url = new URL(API)
-  url.searchParams.set('timeMin', timeMin)
-  url.searchParams.set('timeMax', timeMax)
-  url.searchParams.set('singleEvents', 'true')
-  url.searchParams.set('orderBy', 'startTime')
+  const calendars = await listCalendars(token)
+  const visibleCalendars = calendars.filter((calendar) => calendar.selected)
+  if (visibleCalendars.length === 0) return []
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const txt = await res.text()
-    const err: Error & { status?: number } = new Error(
-      `캘린더 API 오류 (${res.status}): ${txt.slice(0, 200)}`,
-    )
-    err.status = res.status
-    throw err
+  const settled = await Promise.allSettled(
+    visibleCalendars.map((calendar) => listEventsForCalendar(token, calendar, timeMin, timeMax)),
+  )
+
+  const successes = settled.filter(
+    (result): result is PromiseFulfilledResult<CalendarEventRecord[]> => result.status === 'fulfilled',
+  )
+  if (successes.length === 0) {
+    const firstFailure = settled.find((result) => result.status === 'rejected')
+    throw firstFailure?.reason ?? new Error('캘린더 목록을 읽지 못했어요.')
   }
-  const json = await res.json()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ((json.items as any[] | undefined) ?? [])
-    .map((item) => parseCalendarEvent(item))
-    .filter((item): item is CalendarEventRecord => item !== null)
+
+  return successes
+    .flatMap((result) => result.value)
+    .sort((left, right) => left.start.localeCompare(right.start))
 }
 
 export function calendarErrorMessage(error: unknown) {
