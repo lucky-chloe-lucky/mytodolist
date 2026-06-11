@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useApp } from '../store/AppStore'
 import { uid } from '../lib/backend'
 import { dDayLabel, dueState, prettyDate, todayKey } from '../lib/date'
+import { scheduledDuration, todoScheduleLabel } from '../lib/todoCalendar'
 import { findTodoArea, mergeTodoAreas, todoAreaTone } from '../lib/todoAreas'
 import type { Priority, Quadrant, Todo, TodoArea, TodoStatus } from '../lib/types'
 import { Modal } from '../components/Modal'
@@ -110,6 +111,7 @@ export function Todos() {
             const ds = dueState(t.dueDate)
             const area = findTodoArea(todoAreas, t.area)
             const areaTone = todoAreaTone(t.area)
+            const scheduleLabel = todoScheduleLabel(t)
             return (
               <Card key={t.id} className="flex items-start gap-3 !p-3.5">
                 <button
@@ -154,6 +156,16 @@ export function Todos() {
                     {area && (
                       <span className={`rounded-full px-2 py-0.5 ${areaTone.chip}`}>
                         {area.label}
+                      </span>
+                    )}
+                    {scheduleLabel && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">
+                        🕒 {scheduleLabel}
+                      </span>
+                    )}
+                    {t.gcalEventId && (
+                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-700">
+                        Google 연결됨
                       </span>
                     )}
                     {t.status === 'doing' && (
@@ -242,6 +254,11 @@ function TodoEditor({
   const [projectId, setProjectId] = useState(todo?.projectId ?? '')
   const [sprintId, setSprintId] = useState(todo?.sprintId ?? '')
   const [area, setArea] = useState<TodoArea>(todo?.area ?? '')
+  const [scheduledDate, setScheduledDate] = useState(todo?.scheduledDate ?? '')
+  const [scheduledStart, setScheduledStart] = useState(todo?.scheduledStart ?? '')
+  const [durationMin, setDurationMin] = useState(
+    todo?.durationMin ? String(todo.durationMin) : '30',
+  )
 
   const submit = () => {
     if (!title.trim()) return
@@ -261,6 +278,17 @@ function TodoEditor({
 
     if (dueDate) next.dueDate = dueDate
     else delete next.dueDate
+
+    if (scheduledDate && scheduledStart) {
+      next.scheduledDate = scheduledDate
+      next.scheduledStart = scheduledStart
+      next.durationMin = scheduledDuration(Number(durationMin))
+      if (!next.dueDate) next.dueDate = scheduledDate
+    } else {
+      next.scheduledDate = null
+      next.scheduledStart = null
+      next.durationMin = null
+    }
 
     onSave(next)
   }
@@ -325,6 +353,32 @@ function TodoEditor({
             </Select>
           </Field>
         </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="예약 날짜">
+            <TextInput
+              type="date"
+              value={scheduledDate}
+              onChange={(e) => setScheduledDate(e.target.value)}
+            />
+          </Field>
+          <Field label="시작 시간">
+            <TextInput
+              type="time"
+              value={scheduledStart}
+              onChange={(e) => setScheduledStart(e.target.value)}
+            />
+          </Field>
+          <Field label="길이 (분)">
+            <TextInput
+              type="number"
+              min={5}
+              step={5}
+              value={durationMin}
+              onChange={(e) => setDurationMin(e.target.value)}
+              placeholder="30"
+            />
+          </Field>
+        </div>
         <Field label="스프린트">
           <Select value={sprintId ?? ''} onChange={(e) => setSprintId(e.target.value)}>
             <option value="">없음</option>
@@ -353,6 +407,12 @@ function TodoEditor({
             placeholder="세부 내용 (선택)"
           />
         </Field>
+        {(scheduledDate || scheduledStart || todo?.gcalEventId) && (
+          <p className="text-xs text-muted">
+            예약 시간은 Capture에서 바로 구글 캘린더에 붙일 수 있고, 이후에는 설정 화면의 구글 캘린더 동기화로 같은
+            이벤트를 다시 업데이트할 수 있어요.
+          </p>
+        )}
         {todo && (
           <p className="text-xs text-muted">오늘 날짜: {todayKey()}</p>
         )}

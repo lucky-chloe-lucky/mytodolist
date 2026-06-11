@@ -1,14 +1,31 @@
-import { useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { Modal } from '../components/Modal'
+import {
+  calendarErrorMessage,
+  getCalendarToken,
+  upsertEvent,
+} from '../lib/gcal'
+import { todayKey } from '../lib/date'
 import { useApp } from '../store/AppStore'
 import { uid } from '../lib/backend'
 import type { Quadrant, Todo, TodoArea, TodoAreaCategory } from '../lib/types'
+import { scheduledDuration, todoScheduleLabel, todoToCalendarEvent } from '../lib/todoCalendar'
 import {
   findTodoArea,
   isDefaultTodoArea,
   mergeTodoAreas,
   todoAreaTone,
 } from '../lib/todoAreas'
-import { Button, Card, EmptyState, PageHeader, Select, TextArea, TextInput } from '../components/ui'
+import {
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  PageHeader,
+  Select,
+  TextArea,
+  TextInput,
+} from '../components/ui'
 
 const QUADRANTS: {
   key: Quadrant
@@ -61,6 +78,15 @@ const QUADRANT_LABEL: Record<Quadrant, string> = Object.fromEntries(
   QUADRANTS.map((quadrant) => [quadrant.key, quadrant.title.split(' · ')[0]]),
 ) as Record<Quadrant, string>
 
+const DAY_START_HOUR = 6
+const DAY_END_HOUR = 23
+const SLOT_MINUTES = 30
+const SLOT_HEIGHT = 48
+const SCHEDULE_SLOTS = Array.from(
+  { length: ((DAY_END_HOUR - DAY_START_HOUR) * 60) / SLOT_MINUTES + 1 },
+  (_, index) => minutesToTime(DAY_START_HOUR * 60 + index * SLOT_MINUTES),
+)
+
 function sortByRecent(items: Todo[]) {
   return [...items].sort((a, b) => b.createdAt - a.createdAt)
 }
@@ -72,13 +98,32 @@ function splitCaptureLines(text: string) {
     .filter(Boolean)
 }
 
+function parseTimeToMinutes(value?: string | null) {
+  if (!value) return null
+  const [hourText, minuteText] = value.split(':')
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return null
+  return hour * 60 + minute
+}
+
+function minutesToTime(total: number) {
+  const hour = String(Math.floor(total / 60)).padStart(2, '0')
+  const minute = String(total % 60).padStart(2, '0')
+  return `${hour}:${minute}`
+}
+
 export function Capture() {
   const { data, save, remove } = useApp()
   const [draft, setDraft] = useState('')
   const [area, setArea] = useState<TodoArea>('work')
+  const [scheduleDate, setScheduleDate] = useState(todayKey())
   const [newAreaLabel, setNewAreaLabel] = useState('')
   const [editingAreas, setEditingAreas] = useState(false)
   const [areaDrafts, setAreaDrafts] = useState<Record<string, string>>({})
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
+  const [schedulingTodo, setSchedulingTodo] = useState<Todo | null>(null)
+  const [dropSlot, setDropSlot] = useState<string | null>(null)
   const [dropQuadrant, setDropQuadrant] = useState<Quadrant | 'inbox' | null>(null)
   const dragId = useRef<string | null>(null)
   const areas = useMemo(() => mergeTodoAreas(data.todoAreas), [data.todoAreas])
@@ -89,6 +134,7 @@ export function Capture() {
         data.todos.filter(
           (todo) =>
             todo.status !== 'done' &&
+            todo.triageStage !== 'scheduled' &&
             (todo.triageStage === 'inbox' ||
               todo.triageStage === 'triaged' ||
               todo.quadrant != null),
@@ -100,6 +146,24 @@ export function Capture() {
   const inbox = useMemo(
     () => captured.filter((todo) => todo.triageStage === 'inbox' || todo.quadrant == null),
     [captured],
+  )
+
+  const scheduledForDay = useMemo(
+    () =>
+      [...data.todos]
+        .filter(
+          (todo) =>
+            todo.status !== 'done' &&
+            todo.scheduledDate === scheduleDate &&
+            Boolean(todo.scheduledStart),
+        )
+        .sort((left, right) => {
+          const leftTime = parseTimeToMinutes(left.scheduledStart) ?? 0
+          const rightTime = parseTimeToMinutes(right.scheduledStart) ?? 0
+          if (leftTime !== rightTime) return leftTime - rightTime
+          return left.createdAt - right.createdAt
+        }),
+    [data.todos, scheduleDate],
   )
 
   const quadrantItems = useMemo(
@@ -116,6 +180,9 @@ export function Capture() {
   const triageTodo = (todo: Todo, quadrant: Quadrant) => {
     save('todos', {
       ...todo,
+      scheduledDate: null,
+      scheduledStart: null,
+      durationMin: null,
       triageStage: 'triaged',
       quadrant,
     })
@@ -124,9 +191,27 @@ export function Capture() {
   const moveToInbox = (todo: Todo) => {
     save('todos', {
       ...todo,
+      scheduledDate: null,
+      scheduledStart: null,
+      durationMin: null,
       triageStage: 'inbox',
       quadrant: null,
     })
+  }
+
+  const scheduleTodoAt = (todo: Todo, start: string) => {
+    save('todos', {
+      ...todo,
+      triageStage: 'scheduled',
+      scheduledDate: scheduleDate,
+      scheduledStart: start,
+      durationMin: scheduledDuration(todo.durationMin),
+      dueDate: todo.dueDate ?? scheduleDate,
+    })
+  }
+
+  const saveTodoDraft = (todo: Todo) => {
+    save('todos', todo)
   }
 
   const setTodoArea = (todo: Todo, nextArea: TodoArea | null) => {
@@ -189,12 +274,21 @@ export function Capture() {
   }
 
   const onDropTo = (target: Quadrant | 'inbox') => {
-    const todo = captured.find((item) => item.id === dragId.current)
+    const todo = data.todos.find((item) => item.id === dragId.current)
     if (!todo) return
     if (target === 'inbox') moveToInbox(todo)
     else triageTodo(todo, target)
     dragId.current = null
     setDropQuadrant(null)
+    setDropSlot(null)
+  }
+
+  const onDropToSchedule = (start: string) => {
+    const todo = data.todos.find((item) => item.id === dragId.current)
+    if (!todo) return
+    scheduleTodoAt(todo, start)
+    dragId.current = null
+    setDropSlot(null)
   }
 
   const triagedCount = QUADRANTS.reduce(
@@ -272,6 +366,9 @@ export function Capture() {
                   key={todo.id}
                   todo={todo}
                   areas={areas}
+                  onDelete={() => remove('todos', todo.id)}
+                  onEdit={() => setEditingTodo(todo)}
+                  onSchedule={() => setSchedulingTodo(todo)}
                   onDragStart={() => {
                     dragId.current = todo.id
                   }}
@@ -337,6 +434,9 @@ export function Capture() {
                       key={todo.id}
                       todo={todo}
                       areas={areas}
+                      onDelete={() => remove('todos', todo.id)}
+                      onEdit={() => setEditingTodo(todo)}
+                      onSchedule={() => setSchedulingTodo(todo)}
                       onDragStart={() => {
                         dragId.current = todo.id
                       }}
@@ -373,6 +473,211 @@ export function Capture() {
           ))}
         </div>
       </div>
+
+      <Card className="mt-6 overflow-hidden">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted">Schedule Board</p>
+            <h2 className="mt-1 text-lg font-semibold text-ink">캘린더처럼 바로 놓기</h2>
+            <p className="mt-1 text-sm text-muted">
+              인박스나 분류 카드에서 바로 드래그해서 시간대에 놓아보세요. 놓는 순간 일정이 저장돼요.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <TextInput
+              type="date"
+              value={scheduleDate}
+              onChange={(event) => setScheduleDate(event.target.value)}
+              className="w-[168px]"
+            />
+            {scheduleDate !== todayKey() && (
+              <Button variant="subtle" onClick={() => setScheduleDate(todayKey())}>
+                오늘
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[88px_minmax(0,1fr)_280px]">
+          <div className="hidden xl:flex xl:flex-col xl:gap-2">
+            <div className="rounded-xl bg-canvas px-3 py-2 text-center">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted">Date</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{scheduleDate}</p>
+            </div>
+            <div className="rounded-xl bg-canvas px-3 py-2 text-center">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted">Items</p>
+              <p className="mt-1 text-lg font-semibold text-ink metric">{scheduledForDay.length}</p>
+            </div>
+          </div>
+
+          <div className="h-[640px] overflow-y-auto rounded-2xl border border-line bg-white">
+            <div className="relative" style={{ height: SCHEDULE_SLOTS.length * SLOT_HEIGHT }}>
+              {SCHEDULE_SLOTS.map((slot, index) => (
+                <div key={slot} className="flex">
+                  <div className="w-16 shrink-0 border-r border-line/70 bg-canvas px-2 pt-1 text-right text-xs font-medium text-muted">
+                    {slot}
+                  </div>
+                  <div
+                    onDragOver={(event: DragEvent<HTMLDivElement>) => {
+                      event.preventDefault()
+                      setDropSlot(slot)
+                    }}
+                    onDragLeave={() => setDropSlot((current) => (current === slot ? null : current))}
+                    onDrop={() => onDropToSchedule(slot)}
+                    className={[
+                      'relative flex-1 border-b border-line/70 transition',
+                      index % 2 === 0 ? 'bg-white' : 'bg-canvas/20',
+                      dropSlot === slot ? 'bg-brand-50' : '',
+                    ].join(' ')}
+                    style={{ height: SLOT_HEIGHT }}
+                  />
+                </div>
+              ))}
+
+              <div className="pointer-events-none absolute inset-y-0 left-16 right-0">
+              {scheduledForDay.length === 0 && (
+                <div className="grid h-full place-items-center p-6 text-center">
+                  <p className="max-w-sm text-sm text-muted">
+                    아직 이 날의 일정이 없어요. 인박스 카드를 드래그해서 시간대에 놓거나 카드의
+                    `캘린더 붙이기`로 바로 잡아보세요.
+                  </p>
+                </div>
+              )}
+
+              {scheduledForDay.map((todo, index) => {
+                const startMinutes = parseTimeToMinutes(todo.scheduledStart) ?? DAY_START_HOUR * 60
+                const top = ((startMinutes - DAY_START_HOUR * 60) / SLOT_MINUTES) * SLOT_HEIGHT
+                const height = (scheduledDuration(todo.durationMin) / SLOT_MINUTES) * SLOT_HEIGHT
+                const laneOffset = (index % 3) * 10
+                const areaMeta = findTodoArea(areas, todo.area)
+                const areaTone = todoAreaTone(todo.area)
+
+                return (
+                  <button
+                    key={todo.id}
+                    type="button"
+                    draggable
+                    onDragStart={() => {
+                      dragId.current = todo.id
+                    }}
+                    onClick={() => setSchedulingTodo(todo)}
+                    className="pointer-events-auto absolute rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-left shadow-[0_8px_20px_rgba(16,185,129,0.12)] transition hover:border-emerald-300"
+                    style={{
+                      top: top + 2,
+                      left: 8 + laneOffset,
+                      right: 8 + laneOffset,
+                      height: Math.max(height - 4, 40),
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-ink">{todo.title}</p>
+                        <p className="mt-0.5 text-xs font-medium text-emerald-700">
+                          {todo.scheduledStart} · {scheduledDuration(todo.durationMin)}분
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-emerald-700">
+                        시간 수정
+                      </span>
+                    </div>
+                    {todo.notes && (
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted">{todo.notes}</p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setEditingTodo(todo)
+                        }}
+                        className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-muted hover:bg-canvas"
+                      >
+                        내용
+                      </button>
+                      {areaMeta && (
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${areaTone.chip}`}>
+                          {areaMeta.label}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          moveToInbox(todo)
+                        }}
+                        className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-muted hover:bg-canvas"
+                      >
+                        Inbox로
+                      </button>
+                    </div>
+                  </button>
+                )
+              })}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-line bg-canvas/30 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted">Scheduled</p>
+                <h3 className="mt-1 text-base font-semibold text-ink">이 날에 올라간 일</h3>
+              </div>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-muted">
+                {scheduledForDay.length} items
+              </span>
+            </div>
+
+            <div className="mt-3 flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+              {scheduledForDay.length === 0 ? (
+                <EmptyState
+                  icon="🗓️"
+                  title="비어 있어요"
+                  hint="왼쪽/위 카드에서 드래그해서 시간대를 채워보세요"
+                />
+              ) : (
+                scheduledForDay.map((todo) => (
+                  <button
+                    key={todo.id}
+                    type="button"
+                    onClick={() => setSchedulingTodo(todo)}
+                    className="rounded-xl border border-line bg-white px-3 py-3 text-left shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:bg-canvas"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">{todo.title}</p>
+                        <p className="mt-1 text-xs text-emerald-700">
+                          {todo.scheduledStart} · {scheduledDuration(todo.durationMin)}분
+                        </p>
+                      </div>
+                      {todo.gcalEventId && (
+                        <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                          Google
+                        </span>
+                      )}
+                    </div>
+                    {todo.notes && (
+                      <p className="mt-1 line-clamp-2 text-xs text-muted">{todo.notes}</p>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setEditingTodo(todo)
+                        }}
+                        className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-semibold text-muted hover:bg-line"
+                      >
+                        내용 수정
+                      </button>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <div className="mt-6 lg:sticky lg:bottom-3">
         <Card className="border-ink bg-surface/95 shadow-[0_12px_30px_rgba(28,25,23,0.14)] backdrop-blur">
@@ -487,6 +792,25 @@ export function Capture() {
           </div>
         </Card>
       </div>
+
+      {schedulingTodo && (
+        <ScheduleTodoModal todo={schedulingTodo} onClose={() => setSchedulingTodo(null)} />
+      )}
+      {editingTodo && (
+        <EditCaptureTodoModal
+          todo={editingTodo}
+          areas={areas}
+          onClose={() => setEditingTodo(null)}
+          onDelete={() => {
+            remove('todos', editingTodo.id)
+            setEditingTodo(null)
+          }}
+          onSave={(todo) => {
+            saveTodoDraft(todo)
+            setEditingTodo(null)
+          }}
+        />
+      )}
     </>
   )
 }
@@ -495,17 +819,24 @@ function CaptureTodoCard({
   todo,
   areas,
   footer,
+  onDelete,
+  onEdit,
+  onSchedule,
   onDragStart,
   onAreaChange,
 }: {
   todo: Todo
   areas: TodoAreaCategory[]
   footer: ReactNode
+  onDelete: () => void
+  onEdit: () => void
+  onSchedule: () => void
   onDragStart: () => void
   onAreaChange: (nextArea: TodoArea | null) => void
 }) {
   const meta = findTodoArea(areas, todo.area)
   const tone = todoAreaTone(todo.area)
+  const scheduleLabel = todoScheduleLabel(todo)
 
   return (
     <div
@@ -527,26 +858,325 @@ function CaptureTodoCard({
         )}
       </div>
 
+      {(scheduleLabel || todo.gcalEventId) && (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+          {scheduleLabel && (
+            <span className="rounded-full bg-emerald-50 px-2 py-1 font-medium text-emerald-700">
+              📅 {scheduleLabel}
+            </span>
+          )}
+          {todo.gcalEventId && (
+            <span className="rounded-full bg-sky-50 px-2 py-1 font-medium text-sky-700">
+              Google 연결됨
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="mt-3 flex flex-col gap-2">
         {footer}
-        <div className="flex items-center gap-2">
-          <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
-            Area
-          </span>
-          <Select
-            value={todo.area ?? ''}
-            onChange={(event) => onAreaChange(event.target.value || null)}
-            className="!py-1.5 !text-xs"
-          >
-            <option value="">없음</option>
-            {areas.map((area) => (
-              <option key={area.id} value={area.id}>
-                {area.label}
-              </option>
-            ))}
-          </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" onClick={onEdit} className="!px-2.5 !py-1.5 text-xs">
+            내용 수정
+          </Button>
+          <Button variant="subtle" onClick={onSchedule} className="!px-3 !py-1.5 text-xs">
+            {todo.gcalEventId ? '캘린더 수정' : '캘린더 붙이기'}
+          </Button>
+          <Button variant="danger" onClick={onDelete} className="!px-2.5 !py-1.5 text-xs">
+            삭제
+          </Button>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
+              Area
+            </span>
+            <Select
+              value={todo.area ?? ''}
+              onChange={(event) => onAreaChange(event.target.value || null)}
+              className="!py-1.5 !text-xs"
+            >
+              <option value="">없음</option>
+              {areas.map((area) => (
+                <option key={area.id} value={area.id}>
+                  {area.label}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function EditCaptureTodoModal({
+  todo,
+  areas,
+  onClose,
+  onDelete,
+  onSave,
+}: {
+  todo: Todo
+  areas: TodoAreaCategory[]
+  onClose: () => void
+  onDelete: () => void
+  onSave: (todo: Todo) => void
+}) {
+  const [title, setTitle] = useState(todo.title)
+  const [notes, setNotes] = useState(todo.notes ?? '')
+  const [area, setArea] = useState(todo.area ?? '')
+  const [dueDate, setDueDate] = useState(todo.dueDate ?? '')
+
+  const submit = () => {
+    if (!title.trim()) return
+    const next: Todo = {
+      ...todo,
+      title: title.trim(),
+      area: area || null,
+    }
+    if (notes.trim()) next.notes = notes.trim()
+    else delete next.notes
+
+    if (dueDate) next.dueDate = dueDate
+    else delete next.dueDate
+
+    onSave(next)
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="인박스 내용 수정"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            취소
+          </Button>
+          <Button variant="danger" onClick={onDelete}>
+            삭제
+          </Button>
+          <Button onClick={submit} disabled={!title.trim()}>
+            저장
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <Field label="제목">
+          <TextInput
+            autoFocus
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="무엇을 해야 하나요?"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) submit()
+            }}
+          />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="영역">
+            <Select value={area} onChange={(event) => setArea(event.target.value)}>
+              <option value="">없음</option>
+              {areas.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="마감일">
+            <TextInput
+              type="date"
+              value={dueDate}
+              onChange={(event) => setDueDate(event.target.value)}
+            />
+          </Field>
+        </div>
+        <Field label="메모">
+          <TextArea
+            rows={4}
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            placeholder="세부 내용이나 떠오른 맥락을 적어두세요"
+          />
+        </Field>
+      </div>
+    </Modal>
+  )
+}
+
+function ScheduleTodoModal({
+  todo,
+  onClose,
+}: {
+  todo: Todo
+  onClose: () => void
+}) {
+  const { cloudConfigured, save } = useApp()
+  const [scheduledDate, setScheduledDate] = useState(todo.scheduledDate ?? todo.dueDate ?? todayKey())
+  const [scheduledStart, setScheduledStart] = useState(todo.scheduledStart ?? '09:00')
+  const [durationMin, setDurationMin] = useState(String(scheduledDuration(todo.durationMin)))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setScheduledDate(todo.scheduledDate ?? todo.dueDate ?? todayKey())
+    setScheduledStart(todo.scheduledStart ?? '09:00')
+    setDurationMin(String(scheduledDuration(todo.durationMin)))
+    setSaving(false)
+    setError(null)
+  }, [todo])
+
+  const buildNextTodo = () => {
+    const minutes = scheduledDuration(Number(durationMin))
+    const next: Todo = {
+      ...todo,
+      triageStage: 'scheduled',
+      scheduledDate,
+      scheduledStart,
+      durationMin: minutes,
+    }
+    if (!next.dueDate) next.dueDate = scheduledDate
+    return next
+  }
+
+  const persist = async (syncToCalendar: boolean) => {
+    if (!scheduledDate || !scheduledStart) return
+    setSaving(true)
+    setError(null)
+    try {
+      let next = buildNextTodo()
+      await save('todos', next)
+
+      if (syncToCalendar) {
+        const token = await getCalendarToken()
+        const event = todoToCalendarEvent(next)
+        if (!event) throw new Error('캘린더로 보낼 일정 정보가 부족해요.')
+        const id = await upsertEvent(token, event, next.gcalEventId)
+        if (id !== next.gcalEventId) {
+          next = { ...next, gcalEventId: id }
+          await save('todos', next)
+        }
+      }
+
+      onClose()
+    } catch (eventError) {
+      setError(calendarErrorMessage(eventError))
+      setSaving(false)
+      return
+    }
+    setSaving(false)
+  }
+
+  const clearScheduledTime = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await save('todos', {
+        ...todo,
+        triageStage: 'inbox',
+        scheduledDate: null,
+        scheduledStart: null,
+        durationMin: null,
+      })
+      onClose()
+    } catch (eventError) {
+      setError(calendarErrorMessage(eventError))
+      setSaving(false)
+      return
+    }
+    setSaving(false)
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="인박스 일정을 캘린더로 보내기"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            취소
+          </Button>
+          {(todo.scheduledDate || todo.scheduledStart) && (
+            <Button variant="danger" onClick={clearScheduledTime} disabled={saving}>
+              시간 제거
+            </Button>
+          )}
+          <Button variant="subtle" onClick={() => persist(false)} disabled={saving}>
+            일정만 저장
+          </Button>
+          <Button onClick={() => persist(true)} disabled={saving || !cloudConfigured}>
+            {saving ? '처리 중…' : todo.gcalEventId ? '캘린더 업데이트' : '구글 캘린더에 붙이기'}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="rounded-xl bg-canvas px-3 py-2">
+          <p className="text-sm font-medium text-ink">{todo.title}</p>
+          <p className="mt-1 text-xs text-muted">
+            시간을 저장해두면 설정 화면의 전체 구글 캘린더 동기화에도 함께 포함돼요.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="날짜">
+            <TextInput
+              type="date"
+              value={scheduledDate}
+              onChange={(event) => setScheduledDate(event.target.value)}
+            />
+          </Field>
+          <Field label="시작 시간">
+            <TextInput
+              type="time"
+              value={scheduledStart}
+              onChange={(event) => setScheduledStart(event.target.value)}
+            />
+          </Field>
+          <Field label="길이 (분)">
+            <TextInput
+              type="number"
+              min={5}
+              step={5}
+              value={durationMin}
+              onChange={(event) => setDurationMin(event.target.value)}
+              placeholder="30"
+            />
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {[30, 60, 90, 120].map((minutes) => (
+            <button
+              key={minutes}
+              type="button"
+              onClick={() => setDurationMin(String(minutes))}
+              className={[
+                'rounded-full px-3 py-1.5 text-xs font-semibold transition',
+                Number(durationMin) === minutes
+                  ? 'bg-ink text-white'
+                  : 'bg-canvas text-muted hover:bg-line',
+              ].join(' ')}
+            >
+              {minutes}분
+            </button>
+          ))}
+        </div>
+
+        {!todo.dueDate && scheduledDate && (
+          <p className="text-xs text-muted">
+            마감일이 비어 있으면 이 날짜를 마감일로도 같이 저장해둘게요.
+          </p>
+        )}
+        {!cloudConfigured && (
+          <p className="text-sm text-amber-600">
+            현재는 로컬 모드라서 구글 캘린더 전송은 꺼져 있어요. 일정만 저장할 수 있습니다.
+          </p>
+        )}
+        {error && <p className="text-sm text-red-600">⚠️ {error}</p>}
+      </div>
+    </Modal>
   )
 }

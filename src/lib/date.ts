@@ -29,6 +29,11 @@ export function prettyDateFull(key: string): string {
   return `${format(d, 'yyyy년 M월 d일')} (${WEEKDAYS[d.getDay()]})`
 }
 
+export function prettyDateTime(key: string): string {
+  const d = parseISO(key)
+  return `${format(d, 'M월 d일')} (${WEEKDAYS[d.getDay()]}) ${format(d, 'HH:mm')}`
+}
+
 // ── Week helpers (week starts Sunday, like the reference) ────────────
 
 // The key of the week that contains `key`: that week's Sunday, YYYY-MM-DD.

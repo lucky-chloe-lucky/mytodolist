@@ -1,7 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useApp } from '../store/AppStore'
-import { getCalendarToken, upsertEvent, type CalEvent } from '../lib/gcal'
-import { prettyDate } from '../lib/date'
+import {
+  calendarErrorMessage,
+  getCalendarToken,
+  upsertEvent,
+  type CalEvent,
+} from '../lib/gcal'
+import { prettyDate, prettyDateTime } from '../lib/date'
+import { todoToCalendarEvent } from '../lib/todoCalendar'
 import { Button, Card } from './ui'
 
 type Target = {
@@ -18,9 +24,11 @@ export function GcalSync() {
 
   const targets = useMemo<Target[]>(() => {
     const list: Target[] = []
-    for (const t of data.todos)
-      if (t.dueDate && t.status !== 'done')
-        list.push({ coll: 'todos', item: t, ev: { summary: `✅ ${t.title}`, start: t.dueDate } })
+    for (const t of data.todos) {
+      if (t.status === 'done') continue
+      const ev = todoToCalendarEvent(t)
+      if (ev) list.push({ coll: 'todos', item: t, ev })
+    }
     for (const m of data.milestones)
       if (m.dueDate && !m.done)
         list.push({ coll: 'milestones', item: m, ev: { summary: `🎯 ${m.title}`, start: m.dueDate } })
@@ -55,16 +63,7 @@ export function GcalSync() {
       }
       setMsg(`${n}개 일정을 구글 캘린더에 동기화했어요. 🎉`)
     } catch (e) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const any = e as any
-      const m = any?.message ?? String(e)
-      if (any?.code === 'auth/popup-closed-by-user' || /popup-closed|cancel/i.test(m))
-        setErr('로그인 창이 닫혔어요. 다시 시도해주세요.')
-      else if (any?.status === 403 || any?.status === 401 || /access|permission|forbidden|insufficient|disabled/i.test(m))
-        setErr(
-          '권한/설정 문제예요. 구글 클라우드 콘솔에서 ① Calendar API 사용 설정 ② OAuth 동의화면에 캘린더 권한 추가 ③ 본인을 테스트 사용자로 등록 했는지 확인해주세요.',
-        )
-      else setErr(m)
+      setErr(calendarErrorMessage(e))
     } finally {
       setSyncing(false)
     }
@@ -79,15 +78,17 @@ export function GcalSync() {
     <Card>
       <h2 className="mb-1 font-semibold text-ink">📅 구글 캘린더</h2>
       <p className="mb-3 text-sm text-muted">
-        마감일 있는 <b className="text-ink">할 일·마일스톤·스프린트</b>를 구글 캘린더에 이벤트로 내보내요. (한 방향)
-        버튼을 누르면 캘린더 권한을 한 번 요청해요.
+        마감일 있는 <b className="text-ink">할 일·마일스톤·스프린트</b>와 Capture에서 시간까지 잡아둔
+        <b className="text-ink"> 인박스 일정</b>을 구글 캘린더에 내보내요. 버튼을 누르면 캘린더 권한을 한 번
+        요청해요.
       </p>
 
       {targets.length > 0 && (
         <ul className="mb-3 flex flex-col gap-0.5 text-xs text-muted">
           {preview.map((t) => (
             <li key={t.item.id} className="tnum">
-              {prettyDate(t.ev.start)} · {t.ev.summary}
+              {t.ev.allDay === false ? prettyDateTime(t.ev.start) : prettyDate(t.ev.start)} ·{' '}
+              {t.ev.summary}
             </li>
           ))}
           {targets.length > preview.length && <li>… 외 {targets.length - preview.length}개</li>}

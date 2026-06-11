@@ -3,7 +3,7 @@ import {
   reauthenticateWithPopup,
   signInWithPopup,
 } from 'firebase/auth'
-import { addDays, parseISO } from 'date-fns'
+import { addDays, addMinutes, formatISO, parseISO } from 'date-fns'
 import { auth } from './firebase'
 import { toKey } from './date'
 
@@ -43,11 +43,23 @@ function allDay(start: string, end?: string) {
   }
 }
 
+function timed(start: string, end?: string, timeZone?: string) {
+  const zone = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const startAt = parseISO(start)
+  const endAt = end ? parseISO(end) : addMinutes(startAt, 30)
+  return {
+    start: { dateTime: formatISO(startAt), timeZone: zone },
+    end: { dateTime: formatISO(endAt), timeZone: zone },
+  }
+}
+
 export interface CalEvent {
   summary: string
   description?: string
-  start: string // YYYY-MM-DD
-  end?: string // YYYY-MM-DD (없으면 하루)
+  start: string // YYYY-MM-DD 또는 ISO datetime
+  end?: string // YYYY-MM-DD 또는 ISO datetime
+  allDay?: boolean
+  timeZone?: string
 }
 
 // 이벤트 생성/수정. existingId 있으면 PATCH, 없으면 POST. 반환: 이벤트 id.
@@ -59,7 +71,7 @@ export async function upsertEvent(
   const body = JSON.stringify({
     summary: ev.summary,
     description: ev.description,
-    ...allDay(ev.start, ev.end),
+    ...(ev.allDay === false ? timed(ev.start, ev.end, ev.timeZone) : allDay(ev.start, ev.end)),
   })
   const url = existingId ? `${API}/${existingId}` : API
   const method = existingId ? 'PATCH' : 'POST'
@@ -86,4 +98,21 @@ export async function upsertEvent(
   }
   const json = await res.json()
   return json.id as string
+}
+
+export function calendarErrorMessage(error: unknown) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const any = error as any
+  const message = any?.message ?? String(error)
+  if (any?.code === 'auth/popup-closed-by-user' || /popup-closed|cancel/i.test(message)) {
+    return '로그인 창이 닫혔어요. 다시 시도해주세요.'
+  }
+  if (
+    any?.status === 403 ||
+    any?.status === 401 ||
+    /access|permission|forbidden|insufficient|disabled/i.test(message)
+  ) {
+    return '권한/설정 문제예요. 구글 클라우드 콘솔에서 ① Calendar API 사용 설정 ② OAuth 동의화면에 캘린더 권한 추가 ③ 본인을 테스트 사용자로 등록 했는지 확인해주세요.'
+  }
+  return message
 }
