@@ -1,15 +1,24 @@
+import { addDays, formatISO, parseISO } from 'date-fns'
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { Modal } from '../components/Modal'
 import {
+  type CalendarEventRecord,
   calendarErrorMessage,
+  getEvent,
   getCalendarToken,
+  listEvents,
   upsertEvent,
 } from '../lib/gcal'
 import { todayKey } from '../lib/date'
 import { useApp } from '../store/AppStore'
 import { uid } from '../lib/backend'
 import type { Quadrant, Todo, TodoArea, TodoAreaCategory } from '../lib/types'
-import { scheduledDuration, todoScheduleLabel, todoToCalendarEvent } from '../lib/todoCalendar'
+import {
+  applyCalendarEventToTodo,
+  scheduledDuration,
+  todoScheduleLabel,
+  todoToCalendarEvent,
+} from '../lib/todoCalendar'
 import {
   findTodoArea,
   isDefaultTodoArea,
@@ -113,8 +122,21 @@ function minutesToTime(total: number) {
   return `${hour}:${minute}`
 }
 
+function todoChangedFromRemote(current: Todo, next: Todo) {
+  return (
+    current.title !== next.title ||
+    (current.notes ?? '') !== (next.notes ?? '') ||
+    (current.dueDate ?? '') !== (next.dueDate ?? '') ||
+    (current.scheduledDate ?? '') !== (next.scheduledDate ?? '') ||
+    (current.scheduledStart ?? '') !== (next.scheduledStart ?? '') ||
+    (current.durationMin ?? 0) !== (next.durationMin ?? 0) ||
+    (current.triageStage ?? '') !== (next.triageStage ?? '') ||
+    (current.gcalEventId ?? '') !== (next.gcalEventId ?? '')
+  )
+}
+
 export function Capture() {
-  const { data, save, remove } = useApp()
+  const { data, save, remove, cloudConfigured } = useApp()
   const [draft, setDraft] = useState('')
   const [area, setArea] = useState<TodoArea>('work')
   const [scheduleDate, setScheduleDate] = useState(todayKey())
@@ -123,6 +145,10 @@ export function Capture() {
   const [areaDrafts, setAreaDrafts] = useState<Record<string, string>>({})
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [schedulingTodo, setSchedulingTodo] = useState<Todo | null>(null)
+  const [googleEvents, setGoogleEvents] = useState<CalendarEventRecord[]>([])
+  const [googleLoaded, setGoogleLoaded] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [googleError, setGoogleError] = useState<string | null>(null)
   const [dropSlot, setDropSlot] = useState<string | null>(null)
   const [dropQuadrant, setDropQuadrant] = useState<Quadrant | 'inbox' | null>(null)
   const dragId = useRef<string | null>(null)
@@ -164,6 +190,25 @@ export function Capture() {
           return left.createdAt - right.createdAt
         }),
     [data.todos, scheduleDate],
+  )
+
+  const linkedTodoEventIds = useMemo(
+    () => new Set(data.todos.map((todo) => todo.gcalEventId).filter(Boolean)),
+    [data.todos],
+  )
+
+  const externalTimedEvents = useMemo(
+    () =>
+      googleEvents
+        .filter((event) => !event.allDay && !linkedTodoEventIds.has(event.id))
+        .sort((left, right) => left.start.localeCompare(right.start)),
+    [googleEvents, linkedTodoEventIds],
+  )
+
+  const externalAllDayEvents = useMemo(
+    () =>
+      googleEvents.filter((event) => event.allDay && !linkedTodoEventIds.has(event.id)),
+    [googleEvents, linkedTodoEventIds],
   )
 
   const quadrantItems = useMemo(
@@ -212,6 +257,59 @@ export function Capture() {
 
   const saveTodoDraft = (todo: Todo) => {
     save('todos', todo)
+  }
+
+  const loadGoogleSchedule = async (interactive = true) => {
+    if (!cloudConfigured) return
+    setGoogleLoading(true)
+    setGoogleError(null)
+    try {
+      const token = await getCalendarToken()
+      const rangeStart = formatISO(parseISO(`${scheduleDate}T00:00`))
+      const rangeEnd = formatISO(addDays(parseISO(`${scheduleDate}T00:00`), 1))
+      const events = await listEvents(token, rangeStart, rangeEnd)
+
+      const todosById = new Map(data.todos.map((todo) => [todo.id, todo]))
+      const todosByEventId = new Map(
+        data.todos
+          .filter((todo) => todo.gcalEventId)
+          .map((todo) => [todo.gcalEventId as string, todo]),
+      )
+
+      const handledEventIds = new Set<string>()
+
+      for (const event of events) {
+        const matchedTodo =
+          todosByEventId.get(event.id) ??
+          (event.flowRef?.collection === 'todos' ? todosById.get(event.flowRef.itemId) : undefined)
+        if (!matchedTodo) continue
+        handledEventIds.add(event.id)
+        const nextTodo = applyCalendarEventToTodo(matchedTodo, event)
+        if (todoChangedFromRemote(matchedTodo, nextTodo)) await save('todos', nextTodo)
+      }
+
+      const localLinkedForDay = data.todos.filter(
+        (todo) =>
+          todo.gcalEventId &&
+          todo.status !== 'done' &&
+          (todo.scheduledDate === scheduleDate || todo.dueDate === scheduleDate),
+      )
+
+      for (const todo of localLinkedForDay) {
+        if (!todo.gcalEventId || handledEventIds.has(todo.gcalEventId)) continue
+        const remote = await getEvent(token, todo.gcalEventId)
+        if (!remote) continue
+        const nextTodo = applyCalendarEventToTodo(todo, remote)
+        if (todoChangedFromRemote(todo, nextTodo)) await save('todos', nextTodo)
+      }
+
+      setGoogleEvents(events)
+      if (interactive) setGoogleLoaded(true)
+    } catch (error) {
+      setGoogleError(calendarErrorMessage(error))
+    } finally {
+      setGoogleLoading(false)
+    }
   }
 
   const setTodoArea = (todo: Todo, nextArea: TodoArea | null) => {
@@ -290,6 +388,11 @@ export function Capture() {
     dragId.current = null
     setDropSlot(null)
   }
+
+  useEffect(() => {
+    if (!googleLoaded) return
+    void loadGoogleSchedule(false)
+  }, [scheduleDate])
 
   const triagedCount = QUADRANTS.reduce(
     (sum, quadrant) => sum + quadrantItems[quadrant.key].length,
@@ -483,7 +586,7 @@ export function Capture() {
               인박스나 분류 카드에서 바로 드래그해서 시간대에 놓아보세요. 놓는 순간 일정이 저장돼요.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <TextInput
               type="date"
               value={scheduleDate}
@@ -495,8 +598,19 @@ export function Capture() {
                 오늘
               </Button>
             )}
+            {cloudConfigured && (
+              <Button onClick={() => void loadGoogleSchedule(true)} disabled={googleLoading}>
+                {googleLoading
+                  ? '가져오는 중…'
+                  : googleLoaded
+                    ? 'Google 일정 새로고침'
+                    : 'Google 일정 가져오기'}
+              </Button>
+            )}
           </div>
         </div>
+
+        {googleError && <p className="mb-3 text-sm text-red-600">⚠️ {googleError}</p>}
 
         <div className="grid gap-4 xl:grid-cols-[88px_minmax(0,1fr)_280px]">
           <div className="hidden xl:flex xl:flex-col xl:gap-2">
@@ -507,6 +621,12 @@ export function Capture() {
             <div className="rounded-xl bg-canvas px-3 py-2 text-center">
               <p className="text-xs uppercase tracking-[0.18em] text-muted">Items</p>
               <p className="mt-1 text-lg font-semibold text-ink metric">{scheduledForDay.length}</p>
+            </div>
+            <div className="rounded-xl bg-canvas px-3 py-2 text-center">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted">Google</p>
+              <p className="mt-1 text-lg font-semibold text-ink metric">
+                {externalTimedEvents.length + externalAllDayEvents.length}
+              </p>
             </div>
           </div>
 
@@ -561,7 +681,7 @@ export function Capture() {
                       dragId.current = todo.id
                     }}
                     onClick={() => setSchedulingTodo(todo)}
-                    className="pointer-events-auto absolute rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-left shadow-[0_8px_20px_rgba(16,185,129,0.12)] transition hover:border-emerald-300"
+                    className="pointer-events-auto absolute z-10 rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-left shadow-[0_8px_20px_rgba(16,185,129,0.12)] transition hover:border-emerald-300"
                     style={{
                       top: top + 2,
                       left: 8 + laneOffset,
@@ -613,6 +733,49 @@ export function Capture() {
                   </button>
                 )
               })}
+
+              {externalTimedEvents.map((event, index) => {
+                const startMinutes =
+                  parseTimeToMinutes(event.start.slice(11, 16)) ?? DAY_START_HOUR * 60
+                const endMinutes = event.end
+                  ? parseTimeToMinutes(event.end.slice(11, 16)) ?? startMinutes + 30
+                  : startMinutes + 30
+                const top = ((startMinutes - DAY_START_HOUR * 60) / SLOT_MINUTES) * SLOT_HEIGHT
+                const height =
+                  (Math.max(endMinutes - startMinutes, SLOT_MINUTES) / SLOT_MINUTES) * SLOT_HEIGHT
+                const laneOffset = (index % 2) * 8
+
+                return (
+                  <div
+                    key={event.id}
+                    className="pointer-events-auto absolute z-0 rounded-xl border border-slate-200 bg-slate-100/95 px-3 py-2 text-left shadow-[0_6px_16px_rgba(28,25,23,0.08)]"
+                    style={{
+                      top: top + 2,
+                      left: 18 + laneOffset,
+                      right: 18 + laneOffset,
+                      height: Math.max(height - 4, 38),
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">{event.summary}</p>
+                        <p className="mt-0.5 text-xs text-slate-600">
+                          {event.start.slice(11, 16)}
+                          {event.end ? ` - ${event.end.slice(11, 16)}` : ''}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">
+                        Google
+                      </span>
+                    </div>
+                    {event.description && (
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted">
+                        {event.description}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
               </div>
             </div>
           </div>
@@ -629,6 +792,51 @@ export function Capture() {
             </div>
 
             <div className="mt-3 flex max-h-[520px] flex-col gap-2 overflow-y-auto">
+              {googleLoaded && externalAllDayEvents.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted">
+                    Google 종일 일정
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {externalAllDayEvents.map((event) => (
+                      <span
+                        key={event.id}
+                        className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
+                      >
+                        {event.summary}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {googleLoaded && externalTimedEvents.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted">
+                      Google 기존 일정
+                    </p>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                      {externalTimedEvents.length}개
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-col gap-2">
+                    {externalTimedEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                      >
+                        <p className="text-sm font-medium text-ink">{event.summary}</p>
+                        <p className="mt-0.5 text-xs text-slate-600">
+                          {event.start.slice(11, 16)}
+                          {event.end ? ` - ${event.end.slice(11, 16)}` : ''}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {scheduledForDay.length === 0 ? (
                 <EmptyState
                   icon="🗓️"

@@ -53,6 +53,11 @@ function timed(start: string, end?: string, timeZone?: string) {
   }
 }
 
+export interface FlowRef {
+  collection: 'todos' | 'milestones' | 'sprints'
+  itemId: string
+}
+
 export interface CalEvent {
   summary: string
   description?: string
@@ -60,6 +65,62 @@ export interface CalEvent {
   end?: string // YYYY-MM-DD 또는 ISO datetime
   allDay?: boolean
   timeZone?: string
+  flowRef?: FlowRef
+}
+
+export interface CalendarEventRecord {
+  id: string
+  summary: string
+  description?: string
+  start: string
+  end?: string
+  allDay: boolean
+  timeZone?: string
+  flowRef?: FlowRef
+}
+
+function eventBody(ev: CalEvent) {
+  return {
+    summary: ev.summary,
+    description: ev.description,
+    ...(ev.allDay === false ? timed(ev.start, ev.end, ev.timeZone) : allDay(ev.start, ev.end)),
+    ...(ev.flowRef
+      ? {
+          extendedProperties: {
+            private: {
+              flowCollection: ev.flowRef.collection,
+              flowItemId: ev.flowRef.itemId,
+            },
+          },
+        }
+      : {}),
+  }
+}
+
+function parseCalendarEvent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw: any,
+): CalendarEventRecord | null {
+  if (!raw?.id || raw?.status === 'cancelled') return null
+  const allDay = Boolean(raw.start?.date && !raw.start?.dateTime)
+  const flowCollection = raw.extendedProperties?.private?.flowCollection
+  const flowItemId = raw.extendedProperties?.private?.flowItemId
+  return {
+    id: raw.id as string,
+    summary: (raw.summary as string | undefined) ?? '(제목 없음)',
+    description: raw.description as string | undefined,
+    start: (raw.start?.dateTime as string | undefined) ?? (raw.start?.date as string),
+    end: (raw.end?.dateTime as string | undefined) ?? (raw.end?.date as string | undefined),
+    allDay,
+    timeZone: (raw.start?.timeZone as string | undefined) ?? (raw.end?.timeZone as string | undefined),
+    flowRef:
+      flowCollection && flowItemId
+        ? {
+            collection: flowCollection as FlowRef['collection'],
+            itemId: flowItemId as string,
+          }
+        : undefined,
+  }
 }
 
 // 이벤트 생성/수정. existingId 있으면 PATCH, 없으면 POST. 반환: 이벤트 id.
@@ -68,11 +129,7 @@ export async function upsertEvent(
   ev: CalEvent,
   existingId?: string,
 ): Promise<string> {
-  const body = JSON.stringify({
-    summary: ev.summary,
-    description: ev.description,
-    ...(ev.allDay === false ? timed(ev.start, ev.end, ev.timeZone) : allDay(ev.start, ev.end)),
-  })
+  const body = JSON.stringify(eventBody(ev))
   const url = existingId ? `${API}/${existingId}` : API
   const method = existingId ? 'PATCH' : 'POST'
   let res = await fetch(url, {
@@ -98,6 +155,52 @@ export async function upsertEvent(
   }
   const json = await res.json()
   return json.id as string
+}
+
+export async function getEvent(token: string, id: string): Promise<CalendarEventRecord | null> {
+  const res = await fetch(`${API}/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (res.status === 404 || res.status === 410) return null
+  if (!res.ok) {
+    const txt = await res.text()
+    const err: Error & { status?: number } = new Error(
+      `캘린더 API 오류 (${res.status}): ${txt.slice(0, 200)}`,
+    )
+    err.status = res.status
+    throw err
+  }
+  const json = await res.json()
+  return parseCalendarEvent(json)
+}
+
+export async function listEvents(
+  token: string,
+  timeMin: string,
+  timeMax: string,
+): Promise<CalendarEventRecord[]> {
+  const url = new URL(API)
+  url.searchParams.set('timeMin', timeMin)
+  url.searchParams.set('timeMax', timeMax)
+  url.searchParams.set('singleEvents', 'true')
+  url.searchParams.set('orderBy', 'startTime')
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const txt = await res.text()
+    const err: Error & { status?: number } = new Error(
+      `캘린더 API 오류 (${res.status}): ${txt.slice(0, 200)}`,
+    )
+    err.status = res.status
+    throw err
+  }
+  const json = await res.json()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ((json.items as any[] | undefined) ?? [])
+    .map((item) => parseCalendarEvent(item))
+    .filter((item): item is CalendarEventRecord => item !== null)
 }
 
 export function calendarErrorMessage(error: unknown) {
