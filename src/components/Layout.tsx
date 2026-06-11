@@ -4,6 +4,7 @@ import { BrandMark } from './BrandMark'
 
 export const NAV = [
   { to: '/', icon: '🏠', label: '홈', end: true },
+  { to: '/capture', icon: '🧠', label: '캡처' },
   { to: '/todos', icon: '✅', label: 'Todo' },
   { to: '/projects', icon: '📁', label: '프로젝트' },
   { to: '/daily', icon: '📝', label: '데일리' },

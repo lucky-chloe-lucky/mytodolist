@@ -1,5 +1,6 @@
 import type {
   ButtonHTMLAttributes,
+  HTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
@@ -62,9 +63,9 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 export function Card({
   children,
   className,
-}: {
+  ...props
+}: HTMLAttributes<HTMLDivElement> & {
   children: ReactNode
-  className?: string
 }) {
   return (
     <div
@@ -72,6 +73,7 @@ export function Card({
         'rounded-xl border border-line bg-surface p-4 shadow-[0_1px_2px_rgba(28,25,23,0.04)]',
         className,
       )}
+      {...props}
     >
       {children}
     </div>

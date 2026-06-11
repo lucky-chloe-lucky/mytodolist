@@ -2,6 +2,7 @@ import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppProvider, useApp } from './store/AppStore'
 import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
+import { Capture } from './pages/Capture'
 import { Todos } from './pages/Todos'
 import { Projects } from './pages/Projects'
 import { Daily } from './pages/Daily'
@@ -29,6 +30,7 @@ function Gate() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
+        <Route path="capture" element={<Capture />} />
         <Route path="todos" element={<Todos />} />
         <Route path="projects" element={<Projects />} />
         <Route path="daily" element={<Daily />} />

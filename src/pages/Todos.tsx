@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { useApp } from '../store/AppStore'
 import { uid } from '../lib/backend'
 import { dDayLabel, dueState, prettyDate, todayKey } from '../lib/date'
-import type { Priority, Todo, TodoStatus } from '../lib/types'
+import { findTodoArea, mergeTodoAreas, todoAreaTone } from '../lib/todoAreas'
+import type { Priority, Quadrant, Todo, TodoArea, TodoStatus } from '../lib/types'
 import { Modal } from '../components/Modal'
 import {
   Button,
@@ -29,11 +30,19 @@ const STATUS_TABS: { key: TodoStatus | 'all'; label: string }[] = [
   { key: 'hold', label: '보류' },
 ]
 
+const QUADRANT_META: Record<Quadrant, { label: string; cls: string }> = {
+  q1: { label: 'Q1', cls: 'bg-rose-100 text-rose-700' },
+  q2: { label: 'Q2', cls: 'bg-emerald-100 text-emerald-700' },
+  q3: { label: 'Q3', cls: 'bg-sky-100 text-sky-700' },
+  q4: { label: 'Q4', cls: 'bg-stone-200 text-stone-700' },
+}
+
 export function Todos() {
   const { data, save, remove } = useApp()
   const [tab, setTab] = useState<TodoStatus | 'all'>('all')
   const [editing, setEditing] = useState<Todo | null>(null)
   const [open, setOpen] = useState(false)
+  const todoAreas = useMemo(() => mergeTodoAreas(data.todoAreas), [data.todoAreas])
 
   const projectById = useMemo(
     () => Object.fromEntries(data.projects.map((p) => [p.id, p])),
@@ -99,6 +108,8 @@ export function Todos() {
           {filtered.map((t) => {
             const project = t.projectId ? projectById[t.projectId] : undefined
             const ds = dueState(t.dueDate)
+            const area = findTodoArea(todoAreas, t.area)
+            const areaTone = todoAreaTone(t.area)
             return (
               <Card key={t.id} className="flex items-start gap-3 !p-3.5">
                 <button
@@ -130,6 +141,21 @@ export function Todos() {
                       <span className={`size-1.5 rounded-full ${PRIORITY_META[t.priority].dot}`} />
                       {PRIORITY_META[t.priority].label}
                     </span>
+                    {t.triageStage === 'inbox' && (
+                      <span className="rounded-full bg-brand-100 px-2 py-0.5 text-brand-700">
+                        INBOX
+                      </span>
+                    )}
+                    {t.quadrant && (
+                      <span className={`rounded-full px-2 py-0.5 ${QUADRANT_META[t.quadrant].cls}`}>
+                        {QUADRANT_META[t.quadrant].label}
+                      </span>
+                    )}
+                    {area && (
+                      <span className={`rounded-full px-2 py-0.5 ${areaTone.chip}`}>
+                        {area.label}
+                      </span>
+                    )}
                     {t.status === 'doing' && (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
                         진행 중
@@ -184,6 +210,7 @@ export function Todos() {
       {open && (
         <TodoEditor
           todo={editing}
+          todoAreas={todoAreas}
           onClose={() => setOpen(false)}
           onSave={(t) => {
             save('todos', t)
@@ -197,10 +224,12 @@ export function Todos() {
 
 function TodoEditor({
   todo,
+  todoAreas,
   onClose,
   onSave,
 }: {
   todo: Todo | null
+  todoAreas: { id: string; label: string }[]
   onClose: () => void
   onSave: (t: Todo) => void
 }) {
@@ -209,24 +238,31 @@ function TodoEditor({
   const [notes, setNotes] = useState(todo?.notes ?? '')
   const [priority, setPriority] = useState<Priority>(todo?.priority ?? 'medium')
   const [status, setStatus] = useState<TodoStatus>(todo?.status ?? 'todo')
-  const [dueDate, setDueDate] = useState(todo?.dueDate ?? todayKey())
+  const [dueDate, setDueDate] = useState(todo ? (todo.dueDate ?? '') : todayKey())
   const [projectId, setProjectId] = useState(todo?.projectId ?? '')
   const [sprintId, setSprintId] = useState(todo?.sprintId ?? '')
+  const [area, setArea] = useState<TodoArea>(todo?.area ?? '')
 
   const submit = () => {
     if (!title.trim()) return
-    onSave({
-      id: todo?.id ?? uid(),
+    const next: Todo = {
+      ...(todo ?? { id: uid(), createdAt: Date.now() }),
       title: title.trim(),
-      notes: notes.trim() || undefined,
       priority,
       status,
-      dueDate: dueDate || undefined,
       projectId: projectId || null,
       sprintId: sprintId || null,
-      createdAt: todo?.createdAt ?? Date.now(),
+      area: area || null,
       completedAt: status === 'done' ? (todo?.completedAt ?? Date.now()) : null,
-    })
+    }
+
+    if (notes.trim()) next.notes = notes.trim()
+    else delete next.notes
+
+    if (dueDate) next.dueDate = dueDate
+    else delete next.dueDate
+
+    onSave(next)
   }
 
   return (
@@ -295,6 +331,16 @@ function TodoEditor({
             {data.sprints.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="영역">
+          <Select value={area} onChange={(e) => setArea(e.target.value)}>
+            <option value="">없음</option>
+            {todoAreas.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
               </option>
             ))}
           </Select>

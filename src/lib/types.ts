@@ -2,6 +2,9 @@
 
 export type Priority = 'low' | 'medium' | 'high'
 export type TodoStatus = 'todo' | 'doing' | 'done' | 'hold'
+export type TriageStage = 'inbox' | 'triaged' | 'scheduled'
+export type Quadrant = 'q1' | 'q2' | 'q3' | 'q4'
+export type TodoArea = string
 
 export interface Todo {
   id: string
@@ -12,6 +15,13 @@ export interface Todo {
   dueDate?: string // YYYY-MM-DD
   projectId?: string | null
   sprintId?: string | null
+  triageStage?: TriageStage
+  quadrant?: Quadrant | null
+  area?: TodoArea | null
+  focusDate?: string | null
+  scheduledDate?: string | null
+  scheduledStart?: string | null
+  durationMin?: number | null
   gcalEventId?: string // 구글 캘린더 이벤트 id (동기화용)
   createdAt: number
   completedAt?: number | null
@@ -95,6 +105,12 @@ export interface TimeCategory {
   label: string
 }
 
+export interface TodoAreaCategory {
+  id: string
+  label: string
+  createdAt: number
+}
+
 // Chinese vocabulary / phrase note. (example = 중국어 예문 exampleZh)
 export interface ChineseWord {
   id: string
@@ -150,6 +166,7 @@ export interface Schema {
   weeklyNotes: WeeklyNote
   timeblocks: TimeBlocks
   timeCategories: TimeCategory
+  todoAreas: TodoAreaCategory
   chineseWords: ChineseWord
   studySessions: StudySession
   readingNotes: ReadingNote
@@ -168,6 +185,7 @@ export const COLLECTIONS: CollectionName[] = [
   'weeklyNotes',
   'timeblocks',
   'timeCategories',
+  'todoAreas',
   'chineseWords',
   'studySessions',
   'readingNotes',
@@ -195,3 +213,11 @@ export const DEFAULT_TIME_LABELS: Record<string, string> = {
   '#ec4899': '휴식',
   '#8b5cf6': '기타',
 }
+
+export const DEFAULT_TODO_AREAS: TodoAreaCategory[] = [
+  { id: 'work', label: '업무', createdAt: 0 },
+  { id: 'personal', label: '개인', createdAt: 1 },
+  { id: 'health', label: '건강', createdAt: 2 },
+  { id: 'learning', label: '학습', createdAt: 3 },
+  { id: 'other', label: '기타', createdAt: 4 },
+]

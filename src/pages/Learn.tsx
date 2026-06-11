@@ -16,6 +16,11 @@ import {
   TextInput,
 } from '../components/ui'
 
+type ChineseSavePayload = {
+  word: ChineseWord
+  sessionDate?: string
+}
+
 type View = 'chinese' | 'reading'
 const TABS: { key: View; label: string }[] = [
   { key: 'chinese', label: '중국어 🇨🇳' },
@@ -109,6 +114,36 @@ function WordDeck() {
     { key: 'unlearned', label: '안 외움' },
     { key: 'learned', label: '외움' },
   ]
+
+  const saveWord = async ({ word, sessionDate }: ChineseSavePayload) => {
+    await save('chineseWords', word)
+
+    if (sessionDate) {
+      const sourceKey = word.source?.trim() ?? ''
+      const existing = [...data.studySessions]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .find((session) => session.date === sessionDate && (session.source ?? '') === sourceKey)
+
+      if (existing) {
+        if (!existing.wordIds.includes(word.id)) {
+          await save('studySessions', {
+            ...existing,
+            wordIds: [...existing.wordIds, word.id],
+          })
+        }
+      } else {
+        await save('studySessions', {
+          id: uid(),
+          date: sessionDate,
+          source: word.source?.trim() || undefined,
+          wordIds: [word.id],
+          createdAt: Date.now(),
+        })
+      }
+    }
+
+    setOpen(false)
+  }
 
   return (
     <>
@@ -245,10 +280,7 @@ function WordDeck() {
         <ChineseEditor
           word={editing}
           onClose={() => setOpen(false)}
-          onSave={(w) => {
-            save('chineseWords', w)
-            setOpen(false)
-          }}
+          onSave={saveWord}
         />
       )}
 
@@ -334,7 +366,7 @@ function ChineseEditor({
 }: {
   word: ChineseWord | null
   onClose: () => void
-  onSave: (w: ChineseWord) => void
+  onSave: (payload: ChineseSavePayload) => void | Promise<void>
 }) {
   const { data } = useApp()
   const [hanzi, setHanzi] = useState(word?.hanzi ?? '')
@@ -348,6 +380,7 @@ function ChineseEditor({
   const [exampleKo, setExampleKo] = useState(word?.exampleKo ?? '')
   const [source, setSource] = useState(word?.source ?? '')
   const [tags, setTags] = useState((word?.tags ?? []).join(', '))
+  const [sessionDate, setSessionDate] = useState(word ? '' : todayKey())
 
   // 한자 입력 → 병음 자동 (사용자가 병음을 직접 고치기 전까지)
   const onHanziChange = (v: string) => {
@@ -368,21 +401,24 @@ function ChineseEditor({
     if (!hanzi.trim() || !meaning.trim()) return
     const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean)
     onSave({
-      id: word?.id ?? uid(),
-      hanzi: hanzi.trim(),
-      pinyin: pinyin.trim() || undefined,
-      pos: pos.trim() || undefined,
-      meaning: meaning.trim(),
-      example: example.trim() || undefined,
-      examplePinyin: examplePinyin.trim() || undefined,
-      exampleKo: exampleKo.trim() || undefined,
-      source: source.trim() || undefined,
-      tags: tagList.length ? tagList : undefined,
-      learned: word?.learned ?? false,
-      reviewCount: word?.reviewCount,
-      lastReviewedAt: word?.lastReviewedAt,
-      dueAt: word?.dueAt,
-      createdAt: word?.createdAt ?? Date.now(),
+      word: {
+        id: word?.id ?? uid(),
+        hanzi: hanzi.trim(),
+        pinyin: pinyin.trim() || undefined,
+        pos: pos.trim() || undefined,
+        meaning: meaning.trim(),
+        example: example.trim() || undefined,
+        examplePinyin: examplePinyin.trim() || undefined,
+        exampleKo: exampleKo.trim() || undefined,
+        source: source.trim() || undefined,
+        tags: tagList.length ? tagList : undefined,
+        learned: word?.learned ?? false,
+        reviewCount: word?.reviewCount,
+        lastReviewedAt: word?.lastReviewedAt,
+        dueAt: word?.dueAt,
+        createdAt: word?.createdAt ?? Date.now(),
+      },
+      sessionDate: !word && sessionDate ? sessionDate : undefined,
     })
   }
 
@@ -487,6 +523,15 @@ function ChineseEditor({
             <TextInput value={tags} onChange={(e) => setTags(e.target.value)} placeholder="인사, 회화" />
           </Field>
         </div>
+        {!word && (
+          <Field label="학습 날짜 (세션에 자동 포함)">
+            <TextInput type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} />
+            <p className="mt-1 text-xs text-muted">
+              같은 날짜와 같은 출처의 공부 세션이 있으면 그 세션에 합쳐지고, 없으면 새 세션이 만들어져요.
+              비워두면 단어만 저장됩니다.
+            </p>
+          </Field>
+        )}
       </div>
     </Modal>
   )

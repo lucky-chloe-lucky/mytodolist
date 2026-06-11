@@ -37,6 +37,7 @@ const emptyData: DataState = {
   weeklyNotes: [],
   timeblocks: [],
   timeCategories: [],
+  todoAreas: [],
   chineseWords: [],
   studySessions: [],
   readingNotes: [],
